@@ -1,5 +1,5 @@
 uninstall:
-	pip uninstall unified_ie -y
+	pip uninstall event_extraction_pytorch -y
 
 install:
 	make clean
