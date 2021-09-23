@@ -544,15 +544,10 @@ class EventExtractor(object):
                 argument_hard_results[2] += len(gold_arguments_hard)
 
         eval_loss = eval_loss / nb_eval_steps
-        if self.__args.task_name.lower() == 'ee':
-            results = {"loss": eval_loss,
-                       "event_type": self.__get_prf_scores(*event_type_results, eval_type="event_type"),
-                       "argument_hard": self.__get_prf_scores(*argument_hard_results, eval_type="argument_hard"),
-                       "argument_soft": self.__get_prf_scores(*argument_soft_result, eval_type="argument_soft")}
-        else:
-            results = {'loss': eval_loss,
-                       "argument_hard": self.__get_prf_scores(*argument_hard_results, eval_type="argument_hard")
-                       }
+        results = {"loss": eval_loss,
+                   "event_type": self.__get_prf_scores(*event_type_results, eval_type="event_type"),
+                   "argument_hard": self.__get_prf_scores(*argument_hard_results, eval_type="argument_hard"),
+                   "argument_soft": self.__get_prf_scores(*argument_soft_result, eval_type="argument_soft")}
 
         self.__logger.info("***** Eval results for %s datasets *****", data_type)
         info = json.dumps(results, ensure_ascii=False, indent=2)
@@ -663,33 +658,25 @@ class EventExtractor(object):
             preds = tags[0][1:-1]  # [CLS]XXXX[SEP]
             label_entities = get_argument_for_seq(preds, self.__id2label)
             pred_arguments = {text[s: e + 1]: tag for tag, s, e in label_entities}
-            if self.__args.task_name.lower() == 'ee':
-                result = {"text": text, "event_list": []}
-                temp = {}
-                for k, v in pred_arguments.items():
-                    event_type = v[0]
-                    role_name = self.__event_type_dict[v[0]][v[1]]
-                    event_type_name = self.__event_type_dict[v[0]]['name']
-                    if event_type not in temp:
-                        temp[event_type] = {"type_name": event_type_name, "arguments": []}
-                    arguments = {
-                            'role': v[1],
-                            'role_name': role_name,
-                            'argument': k
-                        }
-                    if arguments not in temp[event_type]["arguments"]:
-                        temp[event_type]["arguments"].append(arguments)
-                for k, v in temp.items():
-                    result["event_list"].append({"event_type": k,
-                                                 "event_type_name": v['type_name'],
-                                                 'arguments': v['arguments']})
-            else:
-                result = {'text': text, "entity_list": []}
-                for k, v in pred_arguments.items():
-                    result["event_list"].append({
-                        "role": v,
-                        "argument": k
-                    })
+            result = {"text": text, "event_list": []}
+            temp = {}
+            for k, v in pred_arguments.items():
+                event_type = v[0]
+                role_name = self.__event_type_dict[v[0]][v[1]]
+                event_type_name = self.__event_type_dict[v[0]]['name']
+                if event_type not in temp:
+                    temp[event_type] = {"type_name": event_type_name, "arguments": []}
+                arguments = {
+                        'role': v[1],
+                        'role_name': role_name,
+                        'argument': k
+                    }
+                if arguments not in temp[event_type]["arguments"]:
+                    temp[event_type]["arguments"].append(arguments)
+            for k, v in temp.items():
+                result["event_list"].append({"event_type": k,
+                                             "event_type_name": v['type_name'],
+                                             'arguments': v['arguments']})
             results.append(result)
             yield result
         if pred_output_dir:
