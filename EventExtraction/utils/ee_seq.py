@@ -111,10 +111,11 @@ def tokenize(text, vocab, do_lower_case=False):
 
 
 def convert_examples_to_features(examples, label2id, max_seq_length, tokenizer, cls_token="[CLS]", sep_token="[SEP]",
-                                 pad_token=0, pad_token_segment_id=0, mask_padding_with_zero=True, data_type="train"):
+                                 pad_token=0, pad_token_segment_id=0, mask_padding_with_zero=True, data_type="train",
+                                 do_lower_case=False):
     features = []
     for (ex_index, example) in tqdm(enumerate(examples), desc=f"Convert {data_type} examples to features"):
-        tokens = tokenize(example.text_a, tokenizer.vocab)
+        tokens = tokenize(example.text_a, tokenizer.vocab, do_lower_case)
         if len(tokens) > max_seq_length - 2:
             tokens = tokens[: max_seq_length - 2]
         tokens = [cls_token] + tokens + [sep_token]
@@ -136,7 +137,7 @@ def convert_examples_to_features(examples, label2id, max_seq_length, tokenizer, 
             for argument, (event_type, role) in arguments.items():
                 if (event_type, role) not in label2id and event_type == "OTHER":
                     continue
-                a_token = tokenize(argument, tokenizer.vocab)
+                a_token = tokenize(argument, tokenizer.vocab, do_lower_case)
                 a_token_id = tokenizer.convert_tokens_to_ids(a_token)
                 start_index = search(a_token_id, token_ids)
                 if start_index != -1:

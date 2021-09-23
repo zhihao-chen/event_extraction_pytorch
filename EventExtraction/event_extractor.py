@@ -35,7 +35,7 @@ from EventExtraction.utils.utils_ee import get_argument_for_seq
 
 
 class EventExtractor(object):
-    def __init__(self, args: DataAndTrainArguments, state: str = "train"):
+    def __init__(self, args: DataAndTrainArguments, state: str = "train", model_path: Union[str, Path] = None):
         self.__args = args
         self.__logger = init_logger()
         self.__tensorboard_log_dir = args.output_dir
@@ -55,7 +55,7 @@ class EventExtractor(object):
             if not self.__args.from_scratch and self.__args.model_sate_dict_path:
                 self.__restore(self.__model)
         elif state == "pred":
-            model_path = self.__check_best_model_path()
+            model_path = self.__check_model_path(model_path)
             config, self.__tokenizer, self.__model = self.__init_ee_model(model_name_or_path=model_path)
         else:
             raise ValueError("state must be 'train' or 'pred'")
@@ -75,6 +75,28 @@ class EventExtractor(object):
     @property
     def event_type_dict(self):
         return self.__event_type_dict
+
+    @staticmethod
+    def __check_model_path(model_path):
+        if os.path.exists(model_path):
+            if os.path.isdir(model_path):
+                file_name = ""
+                file_list = list(glob.glob(model_path+'/*.bin'))
+                for name in file_list:
+                    if re.search(r"args\.bin", name):
+                        continue
+                    if re.search(r'pytorch_model|=\d+.*', name):
+                        file_name = name
+                if not os.path.exists(file_name):
+                    raise ValueError(f"The dir of '{model_path}' has not model file")
+                else:
+                    model_path = file_name
+            elif os.path.isfile(model_path):
+                if not re.search(r'(?:pytorch_model|=\d+.*)\.bin', model_path):
+                    raise ValueError(f"The file of '{model_path}' not is model file")
+        else:
+            raise ValueError(f"The dir of '{model_path}' has not model file")
+        return model_path
 
     def __check_best_model_path(self):
         if self.__args.model_type in self.__args.output_dir:
@@ -129,20 +151,22 @@ class EventExtractor(object):
         return accelerator_, summary_writer
 
     def __init_ee_model(self, model_name_or_path=None):
-        if model_name_or_path is None:
-            model_name_or_path = self.__args.model_name_or_path
         self.__args.model_type = self.__args.model_type.lower()
         config_class, tokenizer_class, model_class = MODEL_TYPE_CLASSES[self.__args.model_type]
         config = config_class.from_pretrained(self.__args.config_name if self.__args.config_name
                                               else self.__args.model_name_or_path,
-                                              num_labels=self.__num_labels,
-                                              cache_dir=self.__args.cache_dir if self.__args.cache_dir else None, )
+                                              num_labels=self.__num_labels)
         tokenizer = tokenizer_class.from_pretrained(self.__args.tokenizer_name if self.__args.tokenizer_name
                                                     else self.__args.model_name_or_path,
                                                     do_lower_case=self.__args.do_lower_case)
-        model = model_class.from_pretrained(model_name_or_path, from_tf=bool(".ckpt" in model_name_or_path),
-                                            config=config, train_config=self.__args,
-                                            cache_dir=self.__args.cache_dir if self.__args.cache_dir else None)
+        if model_name_or_path:
+            model = model_class(config=config, train_config=self.__args)
+            model.load_state_dict(torch.load(model_name_or_path, map_location=self.__device))
+        else:
+            model = model_class.from_pretrained(self.__args.model_name_or_path,
+                                                from_tf=bool(".ckpt" in self.__args.model_name_or_path),
+                                                config=config, train_config=self.__args,
+                                                cache_dir=self.__args.cache_dir if self.__args.cache_dir else None)
         return config, tokenizer, model
 
     def __init_optimizer(self, total, parameters, warmup_steps):
@@ -194,13 +218,19 @@ class EventExtractor(object):
         model_state_dict_path = self.__args.model_sate_dict_path
         if os.path.isdir(model_state_dict_path):
             file_name = os.path.join(model_state_dict_path, "pytorch_model.bin")
+            files = list(glob.glob(model_state_dict_path+'/*.bin'))
+            for name in files:
+                if re.search(r"args\.bin", name):
+                    continue
+                if re.search(r'pytorch_model|=\d+.*', name):
+                    file_name = name
             if not os.path.exists(file_name):
-                raise ValueError(f"The dir of '{model_state_dict_path}' has not 'pytorch_model.bin'")
+                raise ValueError(f"The dir of '{model_state_dict_path}' has not model file")
             else:
                 model_state_dict_path = file_name
         elif os.path.isfile(model_state_dict_path):
-            if not re.match(r"pytorch_model.*\.bin", model_state_dict_path):
-                raise ValueError(f"The file of '{model_state_dict_path}' not is 'pytorch_model.bin'")
+            if not re.search(r'(?:pytorch_model|=\d+.*)\.bin', model_state_dict_path):
+                raise ValueError(f"The file of '{model_state_dict_path}' not is model file")
         model.load_state_dict(torch.load(model_state_dict_path, map_location=self.__device))
         self.__logger.info(
             "---------model state {} loaded -------------".format(model_state_dict_path.split("/")[-1]))
@@ -247,7 +277,8 @@ class EventExtractor(object):
                                                     cls_token=tokenizer.cls_token,
                                                     sep_token=tokenizer.sep_token,
                                                     pad_token=tokenizer.convert_tokens_to_ids([tokenizer.pad_token])[0],
-                                                    data_type=data_type
+                                                    data_type=data_type,
+                                                    do_lower_case=self.__args.do_lower_case,
                                                     )
             if self.__args.local_rank in [-1, 0]:
                 self.__logger.info("Saving features into cached file %s", cached_features_file)
@@ -293,7 +324,10 @@ class EventExtractor(object):
         accelerator, writer = self.__init_train_and_evl_env()
         n_gpu = self.__n_gpu
         train_examples = self.__load_examples(data_type="train")
-        train_dataset = self.__load_and_cache_examples(self.__tokenizer, train_examples, data_type='train')
+        train_dataset = self.__load_and_cache_examples(self.__tokenizer,
+                                                       train_examples,
+                                                       data_type='train',
+                                                       max_seq_length=self.__args.train_max_seq_length)
         self.__args.train_batch_size = self.__args.per_gpu_train_batch_size * max(1, n_gpu)
         train_sampler = RandomSampler(train_dataset)
         train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=self.__args.train_batch_size,
@@ -418,7 +452,10 @@ class EventExtractor(object):
         if not os.path.exists(eval_output_dir) and self.__args.local_rank in [-1, 0]:
             os.makedirs(eval_output_dir)
         eval_examples = self.__load_examples(data_type)
-        eval_dataset = self.__load_and_cache_examples(self.__tokenizer, eval_examples, data_type=data_type)
+        eval_dataset = self.__load_and_cache_examples(self.__tokenizer,
+                                                      eval_examples,
+                                                      data_type=data_type,
+                                                      max_seq_length=self.__args.eval_max_seq_length)
         self.__args.eval_batch_size = self.__args.per_gpu_eval_batch_size * max(1, self.__n_gpu)
         # Note that DistributedSampler samples randomly
         eval_sampler = SequentialSampler(eval_dataset)
@@ -430,9 +467,11 @@ class EventExtractor(object):
         self.__logger.info("  Batch size = %d", self.__args.eval_batch_size)
         eval_loss = 0.0
         nb_eval_steps = 0
+
         event_type_results = [0, 0, 0]  # [correct_num, pred_num, gold_num]
-        argument_hard_results = [0, 0, 0]  # 严格匹配event_type, role, argument
         argument_soft_result = [0, 0, 0]  # 部分匹配role, argument
+        argument_hard_results = [0, 0, 0]  # 严格匹配event_type, role, argument
+
         if isinstance(self.__model, nn.DataParallel):
             self.__model = self.__model.module
         for step, batch in tqdm(enumerate(eval_dataloader), desc="Evaluation"):
@@ -459,46 +498,61 @@ class EventExtractor(object):
             tags = tags.squeeze(0).cpu().numpy().tolist()
             for i, example in enumerate(batch_eval_example):
                 gold_arguments_hard = set()
-                gold_arguments_soft = set()
+                pred_arguments_hard = set()
                 gold_event_type = set()
+                gold_arguments_soft = set()
+                pred_arguments_soft = set()
+                pred_event_type = set()
+
                 for k, v in example.arguments.items():
-                    gold_event_type.add(v[0])
-                    gold_arguments_hard.add('-'.join(v + (k,)))
-                    gold_arguments_soft.add('-'.join([v[1], k]))
+                    if self.__args.task_name.lower() == 'ee':
+                        gold_event_type.add(v[0])
+                        gold_arguments_soft.add('-'.join([v[1], k]))
+                    if isinstance(v, str):
+                        gold_arguments_hard.add('-'.join([v, k]))
+                    elif isinstance(v, tuple):
+                        gold_arguments_hard.add('-'.join(v + (k,)))
 
                 text = example.text_a
                 pred_entities = get_argument_for_seq(tags[i][1:-1], self.__id2label)
 
-                pred_arguments_hard = set()
-                pred_arguments_soft = set()
-                pred_event_type = set()
                 for tag, s, e in pred_entities:
                     t = text[s: e + 1]
-                    pred_event_type.add(tag[0])
-                    pred_arguments_hard.add('-'.join(tag + (t,)))
-                    pred_arguments_soft.add('-'.join([tag[1], t]))
+                    if self.__args.task_name.lower() == 'ee':
+                        pred_event_type.add(tag[0])
+                        pred_arguments_soft.add('-'.join([tag[1], t]))
+                    if isinstance(tag, str):
+                        pred_arguments_hard.add('-'.join([tag, t]))
+                    elif isinstance(tag, tuple):
+                        pred_arguments_hard.add('-'.join(tag + (t,)))
+
+                if self.__args.task_name.lower() == 'ee':
+                    correct_arg_num_soft = len(pred_arguments_soft.intersection(gold_arguments_soft))
+                    correct_event_type_num = len(pred_event_type.intersection(gold_event_type))
+
+                    event_type_results[0] += correct_event_type_num
+                    event_type_results[1] += len(pred_event_type)
+                    event_type_results[2] += len(gold_event_type)
+
+                    argument_soft_result[0] += correct_arg_num_soft
+                    argument_soft_result[1] += len(pred_arguments_soft)
+                    argument_soft_result[2] += len(gold_arguments_soft)
 
                 correct_arg_num_hard = len(pred_arguments_hard.intersection(gold_arguments_hard))
-                correct_arg_num_soft = len(pred_arguments_soft.intersection(gold_arguments_soft))
-                correct_event_type_num = len(pred_event_type.intersection(gold_event_type))
-
-                event_type_results[0] += correct_event_type_num
-                event_type_results[1] += len(pred_event_type)
-                event_type_results[2] += len(gold_event_type)
-
                 argument_hard_results[0] += correct_arg_num_hard
                 argument_hard_results[1] += len(pred_arguments_hard)
                 argument_hard_results[2] += len(gold_arguments_hard)
 
-                argument_soft_result[0] += correct_arg_num_soft
-                argument_soft_result[1] += len(pred_arguments_soft)
-                argument_soft_result[2] += len(gold_arguments_soft)
-
         eval_loss = eval_loss / nb_eval_steps
-        results = {"loss": eval_loss,
-                   "event_type": self.__get_prf_scores(*event_type_results, eval_type="event_type"),
-                   "argument_hard": self.__get_prf_scores(*argument_hard_results, eval_type="argument_hard"),
-                   "argument_soft": self.__get_prf_scores(*argument_soft_result, eval_type="argument_soft")}
+        if self.__args.task_name.lower() == 'ee':
+            results = {"loss": eval_loss,
+                       "event_type": self.__get_prf_scores(*event_type_results, eval_type="event_type"),
+                       "argument_hard": self.__get_prf_scores(*argument_hard_results, eval_type="argument_hard"),
+                       "argument_soft": self.__get_prf_scores(*argument_soft_result, eval_type="argument_soft")}
+        else:
+            results = {'loss': eval_loss,
+                       "argument_hard": self.__get_prf_scores(*argument_hard_results, eval_type="argument_hard")
+                       }
 
         self.__logger.info("***** Eval results for %s datasets *****", data_type)
         info = json.dumps(results, ensure_ascii=False, indent=2)
@@ -524,7 +578,8 @@ class EventExtractor(object):
         for checkpoint in checkpoints:
             global_step = checkpoint.split("-")[-1] if len(checkpoints) > 1 else ""
             prefix = checkpoint.split('/')[-1] if checkpoint.find('checkpoint') != -1 else ""
-            config, self.__tokenizer, self.__model = self.__init_ee_model(checkpoint)
+            model_path = self.__check_model_path(checkpoint)
+            config, self.__tokenizer, self.__model = self.__init_ee_model(model_path)
             self.__model.to(self.__device)
             result = self.__evaluate(data_type, prefix)
             if global_step:
@@ -585,7 +640,7 @@ class EventExtractor(object):
 
         results = []
         for step, text in tqdm(enumerate(texts), desc="Predicting"):
-            tokens = tokenize(text, self.__tokenizer.vocab)
+            tokens = tokenize(text, self.__tokenizer.vocab, do_lower_case=self.__args.do_lower_case)
             if len(tokens) > self.__args.eval_max_seq_length - 2:
                 tokens = tokens[: (self.__args.eval_max_seq_length - 2)]
             tokens = ["[CLS]"] + tokens + ["[SEP]"]
@@ -608,19 +663,33 @@ class EventExtractor(object):
             preds = tags[0][1:-1]  # [CLS]XXXX[SEP]
             label_entities = get_argument_for_seq(preds, self.__id2label)
             pred_arguments = {text[s: e + 1]: tag for tag, s, e in label_entities}
-            result = {"text": text, "event_list": []}
-            for k, v in pred_arguments.items():
-                role_name = self.__event_type_dict[v[0]][v[1]]
-                event_type_name = self.__event_type_dict[v[0]]['name']
-                result["event_list"].append({
-                    'event_type': v[0],
-                    'event_type_name': event_type_name,
-                    'arguments': [{
-                        'role': v[1],
-                        'role_name': role_name,
-                        'argument': k
-                    }]
-                })
+            if self.__args.task_name.lower() == 'ee':
+                result = {"text": text, "event_list": []}
+                temp = {}
+                for k, v in pred_arguments.items():
+                    event_type = v[0]
+                    role_name = self.__event_type_dict[v[0]][v[1]]
+                    event_type_name = self.__event_type_dict[v[0]]['name']
+                    if event_type not in temp:
+                        temp[event_type] = {"type_name": event_type_name, "arguments": []}
+                    arguments = {
+                            'role': v[1],
+                            'role_name': role_name,
+                            'argument': k
+                        }
+                    if arguments not in temp[event_type]["arguments"]:
+                        temp[event_type]["arguments"].append(arguments)
+                for k, v in temp.items():
+                    result["event_list"].append({"event_type": k,
+                                                 "event_type_name": v['type_name'],
+                                                 'arguments': v['arguments']})
+            else:
+                result = {'text': text, "entity_list": []}
+                for k, v in pred_arguments.items():
+                    result["event_list"].append({
+                        "role": v,
+                        "argument": k
+                    })
             results.append(result)
             yield result
         if pred_output_dir:

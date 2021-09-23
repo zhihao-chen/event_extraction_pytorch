@@ -24,9 +24,9 @@ with open(path.join(here, "VERSION"), encoding="utf-8") as f:
     version = f.read().strip()
 
 # 改成自己的工程名，尽量与gitlab的工程名起名一致
-proj_name = "EventExtraction"
+proj_name = "event_extraction_pytorch"
 keywords = "event_extraction, bert_crf"
-git_url = f"https://gitlab.bailian-ai.com/ai_algo/{proj_name}"
+git_url = f"https://github.com/zhihao-chen/{proj_name}"
 
 
 def load_requirements(file_name="requirements.txt", comment_char="#"):
@@ -47,8 +47,8 @@ def load_requirements(file_name="requirements.txt", comment_char="#"):
 
 setup(
     name=proj_name,
-    author="bailian.ai",
-    author_email="chenzhihao@bailian.ai",
+    author="andrew chen",
+    author_email="andrew_czh@163.com",
     description=long_description,
     version=version,
     url=git_url,

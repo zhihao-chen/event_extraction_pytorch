@@ -9,22 +9,18 @@
     Change Activity: 
 ======================================
 """
+import json
 from EventExtraction import EventExtractor, DataAndTrainArguments
 
 config = {
     'task_name': 'ee',
-    'data_dir': '../data/normal_data/news2',
     'model_type': 'bert',
-    'model_name_or_path': 'hfl/chinese-roberta-wwm-ext',
-    'output_dir': '../data/output/',  # 模型训练中保存的中间结果，模型，日志等文件的主目录
-    'do_lower_case': True,
-    'use_lstm': False,
-    'no_cuda': False,
-    'eval_max_seq_length': 128,
+    'use_lstm': True,  # 默认是False
+    'eval_max_seq_length': 512,
 }
 
-args = DataAndTrainArguments(**config)
-extractor = EventExtractor(args, state='pred')
+args = DataAndTrainArguments(**config)  # noqa
+extractor = EventExtractor(args, state='pred', model_path='../data/model')
 
 # data_type: 只能是'test'，或者None。若为test则表示在测试数据集上预测
 # input_texts: 若不为空，则表示是预测新的数据
@@ -43,4 +39,4 @@ extractor = EventExtractor(args, state='pred')
 texts = ["博盛医疗完成Pre-A轮融资澳银资本重点参与",
          "百炼智能完成A轮一亿元融资，由今日头条领投"]
 for res in extractor.predict(input_texts=texts):
-    print(res)
+    print(json.dumps(res, ensure_ascii=False, indent=2))

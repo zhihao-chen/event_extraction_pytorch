@@ -63,7 +63,7 @@ class DataAndTrainArguments:
     eval_all_checkpoints: bool = Field(default=False,
                                        description="Evaluate all checkpoints starting with the same prefix "
                                                    "as model_name ending and ending with step number", )
-    do_lower_case: bool = Field(default=True, description="Set this flag if you are using an uncased model.")
+    do_lower_case: bool = Field(default=False, description="Set this flag if you are using an uncased model.")
     use_lstm: bool = False
     from_scratch: bool = True
     from_last_checkpoint: bool = Field(default=False, description="Only if 'from_scratch' was set 'False'")
