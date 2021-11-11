@@ -13,7 +13,7 @@ import codecs
 import glob
 import json
 import os
-import re
+import regex
 import time
 from pathlib import Path
 from typing import List, Union
@@ -29,7 +29,7 @@ from transformers import get_scheduler
 
 from EventExtraction.model.bert_for_ee import MODEL_TYPE_CLASSES
 from EventExtraction.utils.arguments import DataAndTrainArguments
-from EventExtraction.utils.common import init_logger, prepare_device, seed_everything
+from EventExtraction.utils.common import init_logger, prepare_device, seed_everything, is_all_alpha
 from EventExtraction.utils.ee_seq import EEProcessor, convert_examples_to_features, collate_fn, tokenize
 from EventExtraction.utils.utils_ee import get_argument_for_seq
 
@@ -83,16 +83,16 @@ class EventExtractor(object):
                 file_name = ""
                 file_list = list(glob.glob(model_path+'/*.bin'))
                 for name in file_list:
-                    if re.search(r"args\.bin", name):
+                    if regex.search(r"args\.bin", name):
                         continue
-                    if re.search(r'pytorch_model|=\d+.*', name):
+                    if regex.search(r'pytorch_model|=\d+.*', name):
                         file_name = name
                 if not os.path.exists(file_name):
                     raise ValueError(f"The dir of '{model_path}' has not model file")
                 else:
                     model_path = file_name
             elif os.path.isfile(model_path):
-                if not re.search(r'(?:pytorch_model|=\d+.*)\.bin', model_path):
+                if not regex.search(r'(?:pytorch_model|=\d+.*)\.bin', model_path):
                     raise ValueError(f"The file of '{model_path}' not is model file")
         else:
             raise ValueError(f"The dir of '{model_path}' has not model file")
@@ -220,16 +220,16 @@ class EventExtractor(object):
             file_name = os.path.join(model_state_dict_path, "pytorch_model.bin")
             files = list(glob.glob(model_state_dict_path+'/*.bin'))
             for name in files:
-                if re.search(r"args\.bin", name):
+                if regex.search(r"args\.bin", name):
                     continue
-                if re.search(r'pytorch_model|=\d+.*', name):
+                if regex.search(r'pytorch_model|=\d+.*', name):
                     file_name = name
             if not os.path.exists(file_name):
                 raise ValueError(f"The dir of '{model_state_dict_path}' has not model file")
             else:
                 model_state_dict_path = file_name
         elif os.path.isfile(model_state_dict_path):
-            if not re.search(r'(?:pytorch_model|=\d+.*)\.bin', model_state_dict_path):
+            if not regex.search(r'(?:pytorch_model|=\d+.*)\.bin', model_state_dict_path):
                 raise ValueError(f"The file of '{model_state_dict_path}' not is model file")
         model.load_state_dict(torch.load(model_state_dict_path, map_location=self.__device))
         self.__logger.info(
@@ -518,6 +518,10 @@ class EventExtractor(object):
 
                 for tag, s, e in pred_entities:
                     t = text[s: e + 1]
+                    if is_all_alpha(t):
+                        c = text[s-1]
+                        if regex.search(r"[A-Z]", c):
+                            t = c + t
                     if self.__args.task_name.lower() == 'ee':
                         pred_event_type.add(tag[0])
                         pred_arguments_soft.add('-'.join([tag[1], t]))
@@ -657,20 +661,30 @@ class EventExtractor(object):
                 tags = tags.squeeze(0).cpu().numpy().tolist()
             preds = tags[0][1:-1]  # [CLS]XXXX[SEP]
             label_entities = get_argument_for_seq(preds, self.__id2label)
-            pred_arguments = {text[s: e + 1]: tag for tag, s, e in label_entities}
+            pred_arguments = {text[s: e + 1]: (tag, s, e) for tag, s, e in label_entities}
             result = {"text": text, "event_list": []}
             temp = {}
-            for k, v in pred_arguments.items():
+            for k, tuple_ in pred_arguments.items():
+                v = tuple_[0]
+                start = tuple_[1]
+                end = tuple_[2]
+                if is_all_alpha(k):
+                    c = text[start - 1]
+                    if regex.search(r"[A-Z]", c):
+                        k = c + k
+                        start -= 1
                 event_type = v[0]
                 role_name = self.__event_type_dict[v[0]][v[1]]
                 event_type_name = self.__event_type_dict[v[0]]['name']
                 if event_type not in temp:
                     temp[event_type] = {"type_name": event_type_name, "arguments": []}
                 arguments = {
-                        'role': v[1],
-                        'role_name': role_name,
-                        'argument': k
-                    }
+                    'role': v[1],
+                    'role_name': role_name,
+                    'argument': k,
+                    'argument_start': start,
+                    'argument_end': end
+                }
                 if arguments not in temp[event_type]["arguments"]:
                     temp[event_type]["arguments"].append(arguments)
             for k, v in temp.items():

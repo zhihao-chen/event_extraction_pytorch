@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import regex
 import pickle
 import random
 from collections import OrderedDict
@@ -12,6 +13,12 @@ import torch
 import torch.nn as nn
 
 LOGGER = logging.getLogger()
+
+
+def is_all_alpha(word):
+    pattern = r"[a-zA-Z]"
+    temp = [not regex.search(pattern, w) for w in word]
+    return not any(temp)
 
 
 def print_config(config):
